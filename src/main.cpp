@@ -1,29 +1,35 @@
 #include <Arduino.h>
-
 #ifdef ROLE_BASE
-#include "base.h"
-Base base;
+  #ifdef PROTOCOL_ESPNOW
+    #include "base_espnow.h"
+    EspNowBase base;
+  #elif defined(PROTOCOL_LORA)
+    #include "base_lora.h"
+    LoRaBase base;
+  #endif
 #elif defined(ROLE_NODE)
-#include "node.h"
-Node node;
-#else
-#error "No ROLE defined! Use -DROLE_BASE or -DROLE_NODE"
+  #ifdef PROTOCOL_ESPNOW
+    #include "node_espnow.h"
+    EspNowNode node;
+  #elif defined(PROTOCOL_LORA)
+    #include "node_lora.h"
+    LoRaNode node;
+  #endif
 #endif
 
 void setup() {
   Serial.begin(115200);
-
-#ifdef ROLE_BASE
-  base.begin();
-#elif defined(ROLE_NODE)
-  node.begin();
-#endif
+  #ifdef ROLE_BASE
+    base.begin();
+  #elif defined(ROLE_NODE)
+    node.begin();
+  #endif
 }
 
 void loop() {
-#ifdef ROLE_BASE
-  base.update();
-#elif defined(ROLE_NODE)
-  node.update();
-#endif
+  #ifdef ROLE_BASE
+    base.update();
+  #elif defined(ROLE_NODE)
+    node.update();
+  #endif
 }
