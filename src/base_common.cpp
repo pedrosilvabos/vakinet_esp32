@@ -3,10 +3,12 @@
 #include <WiFiClientSecure.h>
 #include <time.h>
 
+
 // Define static members from Base class
 std::vector<std::array<uint8_t, 6>> Base::nodeMacs;
 String Base::lastReceivedData = "[]";
 StaticJsonDocument<1024> Base::jsonDoc;
+WiFiClientSecure Base::secureClient;
 std::queue<Base::Message> Base::messageQueue;
 
 void Base::setupWiFi() {
@@ -71,16 +73,15 @@ vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl
 )EOF";
 
 
-
-  WiFiClientSecure client;
-   client.setCACert(GTS_ROOT_R4_CA);
+  Base::secureClient.setCACert(GTS_ROOT_R4_CA);
   //client.setInsecure();
 
   HTTPClient https;
 
   Serial.println("Sending HTTP POST...");
+  Serial.printf("Free heap: %u\n", ESP.getFreeHeap());  // Debug line added
 
-  https.begin(client, "https://vaquinet-api.onrender.com/esp/data");
+  https.begin(secureClient, "https://vaquinet-api.onrender.com/esp/data");
   https.addHeader("Content-Type", "application/json");
 
   Serial.printf("Response: %s\n", lastReceivedData.c_str());

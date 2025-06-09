@@ -7,6 +7,7 @@
 #include <array>
 #include <queue>
 #include <string>
+#include <WiFiClientSecure.h>
 
 class Base {
 public:
@@ -22,6 +23,7 @@ protected:
   void setupWiFi();
   void processHttpQueue();
 
+  static WiFiClientSecure secureClient;
   static std::vector<std::array<uint8_t, 6>> nodeMacs;
   static String lastReceivedData;
   static StaticJsonDocument<1024> jsonDoc;

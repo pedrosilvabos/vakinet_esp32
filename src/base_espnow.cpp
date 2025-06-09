@@ -1,6 +1,5 @@
 #include "base_espnow.h"
 #include <esp_wifi.h>
-#include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
 void EspNowBase::begin() {
