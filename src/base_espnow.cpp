@@ -1,19 +1,21 @@
 #include "base_espnow.h"
 #include <esp_wifi.h>
-#include <WiFiClientSecure.h>
 
 void EspNowBase::begin() {
   Serial.begin(115200);
   Serial.println("ESP-NOW Base setup started");
-  nodeMacs.push_back({0x4C, 0x11, 0xAE, 0x70, 0x47, 0xAC});
-  nodeMacs.push_back({0x4C, 0x11, 0xAE, 0x65, 0x76, 0x48});
-  nodeMacs.push_back({0x08, 0xA6, 0xF7, 0x0C, 0x04, 0x1C});
+
+  nodeMacs = {
+    {0x4C, 0x11, 0xAE, 0x70, 0x47, 0xAC},
+    {0x4C, 0x11, 0xAE, 0x65, 0x76, 0x48},
+    {0x08, 0xA6, 0xF7, 0x0C, 0x04, 0x1C}
+  };
 
   setupWiFi();
   setupEspNow();
 
   jsonDoc.clear();
-  JsonArray dataArray = jsonDoc.to<JsonArray>();
+  jsonDoc.to<JsonArray>();
 }
 
 void EspNowBase::setupEspNow() {
@@ -28,17 +30,17 @@ void EspNowBase::setupEspNow() {
   esp_now_peer_info_t peerInfo = {};
   peerInfo.channel = 6;
   peerInfo.encrypt = false;
-  for (size_t i = 0; i < nodeMacs.size() && i < 20; i++) {
-    memcpy(peerInfo.peer_addr, nodeMacs[i].data(), 6);
-    if (!esp_now_is_peer_exist(nodeMacs[i].data())) {
+
+  for (const auto& mac : nodeMacs) {
+    addNodeMac(mac.data());
+    if (!esp_now_is_peer_exist(mac.data())) {
+      memcpy(peerInfo.peer_addr, mac.data(), 6);
       if (esp_now_add_peer(&peerInfo) != ESP_OK) {
         Serial.printf("Failed to add peer %02X:%02X:%02X:%02X:%02X:%02X\n",
-                      nodeMacs[i][0], nodeMacs[i][1], nodeMacs[i][2],
-                      nodeMacs[i][3], nodeMacs[i][4], nodeMacs[i][5]);
+                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
       } else {
         Serial.printf("ESP-NOW peer added: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                      nodeMacs[i][0], nodeMacs[i][1], nodeMacs[i][2],
-                      nodeMacs[i][3], nodeMacs[i][4], nodeMacs[i][5]);
+                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
       }
     }
   }
@@ -50,10 +52,12 @@ void EspNowBase::setupEspNow() {
 }
 
 void EspNowBase::addPeer(const uint8_t* mac_addr) {
+  if (mac_addr == nullptr) return;
+
   esp_now_peer_info_t peerInfo = {};
-  memcpy(peerInfo.peer_addr, mac_addr, 6);
   peerInfo.channel = 6;
   peerInfo.encrypt = false;
+  memcpy(peerInfo.peer_addr, mac_addr, 6);
 
   if (!esp_now_is_peer_exist(mac_addr)) {
     if (esp_now_add_peer(&peerInfo) != ESP_OK) {
@@ -64,11 +68,14 @@ void EspNowBase::addPeer(const uint8_t* mac_addr) {
       Serial.printf("ESP-NOW peer added: %02X:%02X:%02X:%02X:%02X:%02X\n",
                     mac_addr[0], mac_addr[1], mac_addr[2],
                     mac_addr[3], mac_addr[4], mac_addr[5]);
+      addNodeMac(mac_addr);
     }
   }
 }
 
 void EspNowBase::removePeer(const uint8_t* mac_addr) {
+  if (mac_addr == nullptr) return;
+
   if (esp_now_is_peer_exist(mac_addr)) {
     if (esp_now_del_peer(mac_addr) != ESP_OK) {
       Serial.printf("Failed to remove peer %02X:%02X:%02X:%02X:%02X:%02X\n",
@@ -78,13 +85,21 @@ void EspNowBase::removePeer(const uint8_t* mac_addr) {
       Serial.printf("ESP-NOW peer removed: %02X:%02X:%02X:%02X:%02X:%02X\n",
                     mac_addr[0], mac_addr[1], mac_addr[2],
                     mac_addr[3], mac_addr[4], mac_addr[5]);
+      std::array<uint8_t, 6> macArray;
+      memcpy(macArray.data(), mac_addr, 6);
+      auto it = std::find(nodeMacs.begin(), nodeMacs.end(), macArray);
+      if (it != nodeMacs.end()) {
+        nodeMacs.erase(it);
+      }
     }
   }
 }
 
 void EspNowBase::sendTriggerToNode(const uint8_t* nodeId) {
+  if (nodeId == nullptr) return;
+
   struct TriggerMessage { uint8_t command; } msg = {1};
-  esp_err_t result = esp_now_send(nodeId, (uint8_t*)&msg, sizeof(msg));
+  esp_err_t result = esp_now_send(nodeId, reinterpret_cast<uint8_t*>(&msg), sizeof(msg));
   if (result == ESP_OK) {
     Serial.printf("Sent trigger to node %02X:%02X:%02X:%02X:%02X:%02X\n",
                   nodeId[0], nodeId[1], nodeId[2], nodeId[3], nodeId[4], nodeId[5]);
@@ -99,17 +114,18 @@ void EspNowBase::update() {
   static size_t currentNodeIndex = 0;
   static bool waitingForResponse = false;
   static unsigned long triggerSentTime = 0;
-  const unsigned long triggerInterval = 5000;
-  const unsigned long responseTimeout = 500;
+  constexpr unsigned long triggerInterval = 5000;
+  constexpr unsigned long responseTimeout = 500;
 
   unsigned long now = millis();
 
   if (!waitingForResponse && now - lastTriggerTime >= triggerInterval) {
     if (nodeMacs.empty()) return;
 
-    if (currentNodeIndex > 0 && nodeMacs.size() > 20) {
+    if (currentNodeIndex > 0 && nodeMacs.size() > MAX_NODES) {
       removePeer(nodeMacs[currentNodeIndex - 1].data());
     }
+
     addPeer(nodeMacs[currentNodeIndex].data());
     sendTriggerToNode(nodeMacs[currentNodeIndex].data());
     waitingForResponse = true;
@@ -122,17 +138,16 @@ void EspNowBase::update() {
   }
 
   if (waitingForResponse && now - triggerSentTime >= responseTimeout) {
+    const size_t index = currentNodeIndex ? currentNodeIndex - 1 : nodeMacs.size() - 1;
     Serial.printf("Timeout waiting for response from node %02X:%02X:%02X:%02X:%02X:%02X\n",
-                  nodeMacs[currentNodeIndex ? currentNodeIndex - 1 : nodeMacs.size() - 1][0],
-                  nodeMacs[currentNodeIndex ? currentNodeIndex - 1 : nodeMacs.size() - 1][1],
-                  nodeMacs[currentNodeIndex ? currentNodeIndex - 1 : nodeMacs.size() - 1][2],
-                  nodeMacs[currentNodeIndex ? currentNodeIndex - 1 : nodeMacs.size() - 1][3],
-                  nodeMacs[currentNodeIndex ? currentNodeIndex - 1 : nodeMacs.size() - 1][4],
-                  nodeMacs[currentNodeIndex ? currentNodeIndex - 1 : nodeMacs.size() - 1][5]);
+                  nodeMacs[index][0], nodeMacs[index][1], nodeMacs[index][2],
+                  nodeMacs[index][3], nodeMacs[index][4], nodeMacs[index][5]);
     waitingForResponse = false;
   }
 
+  processMessageQueue();
   processHttpQueue();
+  checkHeap();
 }
 
 void EspNowBase::onDataSent(const uint8_t* mac_addr, esp_now_send_status_t status) {
@@ -141,6 +156,8 @@ void EspNowBase::onDataSent(const uint8_t* mac_addr, esp_now_send_status_t statu
 }
 
 void EspNowBase::onReceiveEspNow(const uint8_t* mac, const uint8_t* incomingData, int len) {
+  if (!incomingData || len <= 0 || len > 255) return;
+
   char buffer[256];
   memcpy(buffer, incomingData, len);
   buffer[len] = '\0';
@@ -149,26 +166,26 @@ void EspNowBase::onReceiveEspNow(const uint8_t* mac, const uint8_t* incomingData
 
   StaticJsonDocument<256> doc;
   DeserializationError error = deserializeJson(doc, buffer);
-  if (!error) {
-    int value = doc["value"];
-    const char* deviceId = doc["deviceId"];
-
-    jsonDoc.clear();
-    JsonArray dataArray = jsonDoc.to<JsonArray>();
-    JsonObject entry = dataArray.createNestedObject();
-    entry["value"] = value;
-    entry["deviceId"] = String(deviceId);
-
-    lastReceivedData = "";
-    serializeJson(jsonDoc, lastReceivedData);
-
-    Message msg;
-    msg.json = lastReceivedData;
-    msg.receivedAt = millis();
-    messageQueue.push(msg);
-
-    Serial.printf("Response: %s\n", lastReceivedData.c_str());
-  } else {
+  if (error) {
     Serial.println("Failed to parse incoming JSON");
+    return;
   }
+
+  int value = doc["value"] | -1;
+  const char* deviceId = doc["deviceId"] | "";
+
+  jsonDoc.clear();
+  JsonArray dataArray = jsonDoc.to<JsonArray>();
+  JsonObject entry = dataArray.createNestedObject();
+  entry["value"] = value;
+  entry["deviceId"] = deviceId;
+
+  if (serializeJson(jsonDoc, lastReceivedData, sizeof(lastReceivedData)) == 0) {
+    Serial.println("Failed to serialize JSON to lastReceivedData");
+    strcpy(lastReceivedData, "[]");
+    return;
+  }
+
+  Base::enqueueMessage(lastReceivedData); // Call static method
+  Serial.printf("Response: %s\n", lastReceivedData);
 }

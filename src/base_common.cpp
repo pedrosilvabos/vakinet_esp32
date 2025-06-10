@@ -1,54 +1,53 @@
 #include "base.h"
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
 #include <time.h>
 
-
-// Define static members from Base class
-std::vector<std::array<uint8_t, 6>> Base::nodeMacs;
-String Base::lastReceivedData = "[]";
-StaticJsonDocument<1024> Base::jsonDoc;
+// Static members definition
+HTTPClient Base::httpClient;
 WiFiClientSecure Base::secureClient;
+std::vector<std::array<uint8_t, 6>> Base::nodeMacs;
+char Base::lastReceivedData[1024] = "[]";
+StaticJsonDocument<1024> Base::jsonDoc;
 std::queue<Base::Message> Base::messageQueue;
 
 void Base::setupWiFi() {
-  WiFi.mode(WIFI_AP_STA);
-  const char* ssid = "MEO-563920";
-  const char* password = "346cbe99b8";
+    WiFi.mode(WIFI_AP_STA);
+    const char* ssid = "MEO-563920";
+    const char* password = "346cbe99b8";
 
-  WiFi.begin(ssid, password);
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
-    delay(500);
-    Serial.print(".");
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi connected");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-
-    // Synchronize time with NTP
-    configTime(0, 0, "pool.ntp.org");
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo, 10000)) {
-      Serial.println("Time synchronized");
-      Serial.printf("Current time: %04d-%02d-%02d %02d:%02d:%02d\n",
-                    timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                    timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-    } else {
-      Serial.println("Failed to synchronize time");
+    WiFi.begin(ssid, password);
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+        delay(50);
+        Serial.print(".");
     }
-  } else {
-    Serial.println("\nWiFi connection failed");
-  }
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi connected");
+        Serial.print("IP: ");
+        Serial.println(WiFi.localIP());
+
+        configTime(0, 0, "pool.ntp.org");
+        struct tm timeinfo;
+        if (getLocalTime(&timeinfo, 10000)) {
+            Serial.println("Time synchronized");
+        } else {
+            Serial.println("Failed to synchronize time");
+        }
+    } else {
+        Serial.println("\nWiFi connection failed, retrying in 10 seconds");
+        WiFi.disconnect();
+        delay(10000);
+        setupWiFi();
+    }
 }
 
 void Base::processHttpQueue() {
-  if (lastReceivedData == "[]") {
-    return;
-  }
+    if (!strcmp(lastReceivedData, "[]")) {
+        return;
+    }
 
-const char* GTS_ROOT_R4_CA = R"EOF(
+    static bool certSet = false;
+    if (!certSet) {
+        const char* GTS_ROOT_R4_CA = R"EOF(
 -----BEGIN CERTIFICATE-----
 MIIDejCCAmKgAwIBAgIQf+UwvzMTQ77dghYQST2KGzANBgkqhkiG9w0BAQsFADBX
 MQswCQYDVQQGEwJCRTEZMBcGA1UEChMQR2xvYmFsU2lnbiBudi1zYTEQMA4GA1UE
@@ -70,33 +69,119 @@ kGN+hr/W5GvT1tMBjgWKZ1i4//emhA1JG1BbPzoLJQvyEotc03lXjTaCzv8mEbep
 8RqZ7a2CPsgRbuvTPBwcOMBBmuFeU88+FSBX6+7iP0il8b4Z0QFqIwwMHfs/L6K1
 vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl
 -----END CERTIFICATE-----
-)EOF";
-
-
-  Base::secureClient.setCACert(GTS_ROOT_R4_CA);
-  //client.setInsecure();
-
-  HTTPClient https;
-
-  Serial.println("Sending HTTP POST...");
-  Serial.printf("Free heap: %u\n", ESP.getFreeHeap());  // Debug line added
-
-  https.begin(secureClient, "https://vaquinet-api.onrender.com/esp/data");
-  https.addHeader("Content-Type", "application/json");
-
-  Serial.printf("Response: %s\n", lastReceivedData.c_str());
-  int httpResponseCode = https.POST(lastReceivedData);
-  if (httpResponseCode > 0) {
-    String response = https.getString();
-    Serial.printf("HTTP Response code: %d\n", httpResponseCode);
-    Serial.printf("Response: %s\n", response.c_str());
-
-    if (httpResponseCode == HTTP_CODE_OK || httpResponseCode == HTTP_CODE_CREATED) {
-      lastReceivedData = "[]";
-      jsonDoc.clear();
+        )EOF";
+        secureClient.setCACert(GTS_ROOT_R4_CA);
+        certSet = true;
     }
-  } else {
-    Serial.printf("Error on sending POST: %s\n", https.errorToString(httpResponseCode).c_str());
-  }
-  https.end();
+
+    Serial.println("Sending HTTP POST...");
+    char buffer[512];
+    memset(buffer, 0, sizeof(buffer));
+
+    bool began = httpClient.begin(secureClient, "https://vaquinet-api.onrender.com/esp/data");
+    if (!began) {
+        Serial.println("HTTPS begin failed");
+        httpClient.end();
+        secureClient.stop();
+        return;
+    }
+
+    httpClient.addHeader("Content-Type", "application/json");
+
+    int httpResponseCode = httpClient.POST(lastReceivedData);
+
+    if (httpResponseCode > 0) {
+        WiFiClient* stream = httpClient.getStreamPtr();
+        if (stream) {
+            while (stream->available()) {
+                int readLen = stream->readBytes(buffer, sizeof(buffer) - 1);
+                buffer[readLen] = '\0';
+            }
+        }
+        if (httpResponseCode == HTTP_CODE_OK || httpResponseCode == HTTP_CODE_CREATED) {
+            jsonDoc.clear();
+            strcpy(lastReceivedData, "[]");
+        }
+    } else {
+        Serial.printf("POST failed: %s\n", httpClient.errorToString(httpResponseCode).c_str());
+        jsonDoc.clear();
+    }
+
+    httpClient.end();
+    secureClient.stop();
+
+    Serial.printf("Free heap after request: %u\n", ESP.getFreeHeap());
+}
+
+void Base::enqueueMessage(const char* json) {
+    if (messageQueue.size() >= MAX_QUEUE_SIZE) {
+        Serial.println("Queue full, dropping oldest message");
+        messageQueue.pop();
+    }
+    Message msg;
+    strncpy(msg.json, json, sizeof(msg.json) - 1);
+    msg.json[sizeof(msg.json) - 1] = '\0';
+    msg.receivedAt = millis();
+    messageQueue.push(msg);
+}
+
+void Base::addNodeMac(const uint8_t* mac) {
+    std::array<uint8_t, 6> macArray;
+    memcpy(macArray.data(), mac, 6);
+    
+    if (std::find(nodeMacs.begin(), nodeMacs.end(), macArray) == nodeMacs.end()) {
+        if (nodeMacs.size() >= MAX_NODES) {
+            nodeMacs.erase(nodeMacs.begin());
+        }
+        nodeMacs.push_back(macArray);
+    }
+}
+
+void Base::processMessageQueue() {
+    if (messageQueue.empty()) {
+        return;
+    }
+
+    jsonDoc.clear();
+    JsonArray jsonArray = jsonDoc.to<JsonArray>();
+
+    while (!messageQueue.empty() && messageQueue.size() <= MAX_QUEUE_SIZE) {
+        Message msg = messageQueue.front();
+        messageQueue.pop();
+
+        StaticJsonDocument<512> tempDoc;
+        DeserializationError error = deserializeJson(tempDoc, msg.json);
+        if (!error) {
+            jsonArray.add(tempDoc.as<JsonObject>());
+        } else {
+            Serial.printf("Failed to parse message JSON: %s\n", error.c_str());
+        }
+    }
+
+    if (serializeJson(jsonDoc, lastReceivedData, sizeof(lastReceivedData)) == 0) {
+        Serial.println("Failed to serialize JSON to lastReceivedData");
+        strcpy(lastReceivedData, "[]");
+    }
+
+    if (messageQueue.size() > MAX_QUEUE_SIZE) {
+        Serial.println("Queue overflow, clearing oldest messages");
+        while (messageQueue.size() > MAX_QUEUE_SIZE / 2) {
+            messageQueue.pop();
+        }
+    }
+}
+
+void Base::checkHeap() {
+    static unsigned long lastCheck = 0;
+    if (millis() - lastCheck > 60000) {
+        Serial.printf("Free heap: %u\n", ESP.getFreeHeap());
+        if (ESP.getFreeHeap() < 10000) {
+            Serial.println("Warning: Low heap memory");
+            nodeMacs.clear();
+            while (!messageQueue.empty()) messageQueue.pop();
+            jsonDoc.clear();
+            strcpy(lastReceivedData, "[]");
+        }
+        lastCheck = millis();
+    }
 }

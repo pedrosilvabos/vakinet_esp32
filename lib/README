@@ -1,46 +1,97 @@
+IoT ESP32 Project — README
 
-This directory is intended for project specific (private) libraries.
-PlatformIO will compile them to static libraries and link into the executable file.
+Project Overview:
+This project is focused on developing an IoT solution using ESP32-based hardware to remotely monitor sensor data (initially accelerometer and temperature) with planned GPS integration and solar-powered battery management. The goal is a robust, low-power device capable of reliable data transmission via MQTT and HTTP protocols, designed for eventual deployment on specialized LilyGo boards with LoRa, GPS, and solar charging.
 
-The source code of each library should be placed in a separate directory
-("lib/your_library_name/[Code]").
+What We’ve Agreed & Brainstormed:
 
-For example, see the structure of the following example libraries `Foo` and `Bar`:
+    GPS Hot Start & Caching:
+    We’ll rely on existing GPS libraries for ephemeris/almanac caching (hot start). This will be implemented once the LilyGo hardware arrives. Caching data will be stored in RAM initially; if memory is insufficient, we’ll use SD card or cloud backup.
 
-|--lib
-|  |
-|  |--Bar
-|  |  |--docs
-|  |  |--examples
-|  |  |--src
-|  |     |- Bar.c
-|  |     |- Bar.h
-|  |  |- library.json (optional. for custom build options, etc) https://docs.platformio.org/page/librarymanager/config.html
-|  |
-|  |--Foo
-|  |  |- Foo.c
-|  |  |- Foo.h
-|  |
-|  |- README --> THIS FILE
-|
-|- platformio.ini
-|--src
-   |- main.c
+    Battery & Solar Management:
+    We need an MPPT solar charge controller for proper battery charging capped at ~80%. Battery monitoring will be integrated in firmware after hardware arrives.
 
-Example contents of `src/main.c` using Foo and Bar:
-```
-#include <Foo.h>
-#include <Bar.h>
+    Battery Configuration:
+    Two LiPo batteries in parallel are planned, but this is pending hardware delivery.
 
-int main (void)
-{
-  ...
-}
+    Sensor Sampling Intervals:
+    A baseline of approximately 120 seconds between sensor reads and transmissions has been agreed.
 
-```
+    Data Caching & Storage:
+    Start with RAM caching of data to handle transmission failures or delays; scale to SD card or cloud backup if needed.
 
-The PlatformIO Library Dependency Finder will find automatically dependent
-libraries by scanning project source files.
+    Power Optimization:
+    Plan to implement deep sleep cycles to minimize power draw between readings and transmissions.
 
-More information about PlatformIO Library Dependency Finder
-- https://docs.platformio.org/page/librarymanager/ldf.html
+    OTA Updates:
+    Will be added after core functions like sensor reading, data transmission, and power management are stable.
+
+Current Status:
+
+    Running on a standard ESP32 board (no LilyGo yet) with mock sensor data.
+
+    Data transmission over MQTT and HTTP is functional and tested.
+
+    No real sensor sampling, battery monitoring, or solar panel integration yet.
+
+    GPS hot start and caching discussed and planned, but not implemented due to lack of hardware.
+
+    Hardware for full implementation ordered and pending delivery.
+
+Hardware Ordered:
+
+    LILYGO® TTGO Meshtastic T-Beam V1.2 ESP32 LoRa Dev Board (868MHz, OLED)
+
+    7.4V 12000mAh Li-ion Battery with XH2.54 connector
+
+    5x BMA400 3-axis Accelerometer Modules
+
+    LILYGO TTGO T-SIM7600E-L1C 4G LTE ESP32 Board with solar charging
+
+    LoRa 868/915 MHz Accessories Shield for T-SIM7000G ESP32-WROVER-B
+
+    Waterproof DS18B20 Temperature Sensor
+
+    Miscellaneous accessories (door lock hooks, etc.)
+
+Next Steps:
+
+    Receive and integrate LilyGo boards and sensors.
+
+    Implement GPS ephemeris caching and hot start using available libraries.
+
+    Develop battery monitoring and MPPT solar charging firmware.
+
+    Replace mock sensor data with real sensor sampling.
+
+    Add power-saving features (deep sleep).
+
+    Plan OTA update infrastructure.
+
+    Possibly implement SD card storage or cloud backup for cached data.
+
+Prompt to Update ChatGPT with Project Context:
+
+Here is the current status and context of my IoT + ESP32 project:
+
+- We have brainstormed and discussed these key topics, with agreed outcomes:
+
+  1. GPS hot start and ephemeris caching: Using existing GPS libraries; caching will be implemented once LilyGo hardware arrives, leveraging available memory or external SD card.
+
+  2. Battery monitoring and MPPT solar charging: MPPT solar charge controller required; firmware battery management to be added after hardware availability.
+
+  3. Battery configuration: Two LiPo batteries in parallel planned, implementation deferred until hardware arrives.
+
+  4. Sensor sampling intervals: ~120 seconds between samples agreed as baseline.
+
+  5. Data caching and storage: Start with RAM caching; consider SD card or cloud backup if needed.
+
+  6. Power optimization: Deep sleep cycles between readings and transmissions planned.
+
+  7. OTA updates: Future addition after core functions stabilize.
+
+- Hardware ordered includes: LILYGO TTGO Meshtastic T-Beam V1.2 ESP32 LoRa Board, 7.4V 12000mAh Li-ion battery, 5x BMA400 accelerometers, LILYGO T-SIM7600E-L1C 4G LTE ESP32 board with solar charging, LoRa accessories shield, DS18B20 temperature sensor, and other accessories.
+
+- Current implementation status: Running on regular ESP32 with mock sensor data; real sensor sampling, battery monitoring, solar panel integration, and GPS caching are planned next steps.
+
+Use this context to assist with the next steps, code review, or brainstorming.

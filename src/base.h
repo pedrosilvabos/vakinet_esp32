@@ -8,26 +8,37 @@
 #include <queue>
 #include <string>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+
+#define MAX_NODES 50
+#define MAX_QUEUE_SIZE 100
 
 class Base {
 public:
   struct Message {
-    String json;
+    char json[256]; // Replaced String with char array to reduce fragmentation
     unsigned long receivedAt;
   };
 
-  virtual void begin() = 0;
-  virtual void update() = 0;
+  virtual void begin() = 0;   // Setup logic to implement in subclass
+  virtual void update() = 0;  // Loop logic to implement in subclass
+
+  // Add a JSON message to the sending queue
+  static void enqueueMessage(const char* json); // Made static and use const char*
 
 protected:
   void setupWiFi();
   void processHttpQueue();
+  void addNodeMac(const uint8_t* mac);
+  void processMessageQueue();
+  void checkHeap();
 
+  static HTTPClient httpClient;
   static WiFiClientSecure secureClient;
   static std::vector<std::array<uint8_t, 6>> nodeMacs;
-  static String lastReceivedData;
+  static char lastReceivedData[1024];
   static StaticJsonDocument<1024> jsonDoc;
   static std::queue<Message> messageQueue;
 };
 
-#endif
+#endif // BASE_H
