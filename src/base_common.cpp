@@ -4,46 +4,158 @@
 // Static members definition
 HTTPClient Base::httpClient;
 WiFiClientSecure Base::secureClient;
+WiFiClient Base::wifiClient; // Reusable WiFiClient
 std::vector<std::array<uint8_t, 6>> Base::nodeMacs;
 char Base::lastReceivedData[1024] = "[]";
 StaticJsonDocument<1024> Base::jsonDoc;
 std::queue<Base::Message> Base::messageQueue;
 
+void Base::setup() {
+    // Pre-allocate vector capacity to avoid fragmentation
+    nodeMacs.reserve(MAX_NODES);
+}
+
 void Base::setupWiFi() {
     WiFi.mode(WIFI_AP_STA);
     const char* ssid = "MEO-563920";
     const char* password = "346cbe99b8";
+    int attempts = 0;
+    const int maxAttempts = 5;
 
-    WiFi.begin(ssid, password);
-    unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
-        delay(50);
-        Serial.print(".");
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\nWiFi connected");
-        Serial.print("IP: ");
-        Serial.println(WiFi.localIP());
-
-        configTime(0, 0, "pool.ntp.org");
-        struct tm timeinfo;
-        if (getLocalTime(&timeinfo, 10000)) {
-            Serial.println("Time synchronized");
-        } else {
-            Serial.println("Failed to synchronize time");
+    while (attempts < maxAttempts) {
+        WiFi.begin(ssid, password);
+        unsigned long start = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+            delay(50);
+            Serial.print(".");
         }
-    } else {
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("\nWiFi connected");
+            Serial.print("IP: ");
+            Serial.println(WiFi.localIP());
+            configTime(0, 0, "pool.ntp.org");
+            struct tm timeinfo;
+            if (getLocalTime(&timeinfo, 10000)) {
+                Serial.println("Time synchronized");
+            } else {
+                Serial.println("Failed to synchronize time");
+            }
+            return;
+        }
         Serial.println("\nWiFi connection failed, retrying in 10 seconds");
         WiFi.disconnect();
         delay(10000);
-        setupWiFi();
+        attempts++;
     }
+    Serial.println("WiFi connection failed after max attempts");
+}
+
+void Base::processLocalHttpQueue() {
+    static bool wasEmpty = false;
+
+    if (lastReceivedData == nullptr || strlen(lastReceivedData) < 5 || 
+        strcmp(lastReceivedData, "[]") == 0 || strstr(lastReceivedData, "[null]")) {
+        if (!wasEmpty) {
+            Serial.println("[HTTP] Skipping empty or invalid data.");
+            wasEmpty = true;
+        }
+        return;
+    }
+
+    wasEmpty = false;
+
+    Serial.println("======== DEBUG START ========");
+    Serial.print("[HTTP] ESP32 local IP: ");
+    Serial.println(WiFi.localIP());
+
+    const char* host = "192.168.1.87";
+    const int port = 10001;
+    const char* endpoint = "/esp/data";
+
+    Serial.print("[HTTP] Connecting to ");
+    Serial.print("http://");
+    Serial.print(host);
+    Serial.print(":");
+    Serial.print(port);
+    Serial.println(endpoint);
+
+    // Test raw TCP socket
+    if (!wifiClient.connect(host, port)) {
+        Serial.println("✖️ [TCP] Raw socket connect() failed");
+    } else {
+        Serial.println("✔️ [TCP] Raw socket connect() OK");
+        wifiClient.stop(); // Close so HTTPClient can use it
+    }
+
+    char url[128];
+    snprintf(url, sizeof(url), "http://%s:%d%s", host, port, endpoint);
+
+    Serial.println("[HTTP] Starting HTTPClient...");
+    httpClient.setTimeout(5000); // 5-second timeout
+    bool began = httpClient.begin(wifiClient, url);
+    if (!began) {
+        Serial.println("✖️ [HTTP] httpClient.begin() failed");
+        httpClient.end();
+        wifiClient.stop();
+        return;
+    }
+
+    Serial.println("✔️ [HTTP] httpClient.begin() succeeded");
+    httpClient.addHeader("Content-Type", "application/json");
+
+    Serial.print("[HTTP] POSTing payload: ");
+    Serial.println(lastReceivedData);
+
+    int httpResponseCode = httpClient.POST(lastReceivedData);
+
+    if (httpResponseCode > 0) {
+        Serial.printf("✔️ [HTTP] POST success! Code: %d\n", httpResponseCode);
+
+        char buffer[512];
+        WiFiClient* stream = httpClient.getStreamPtr();
+        if (stream && stream->available()) {
+            unsigned long start = millis();
+            int readLen = 0;
+            while (stream->available() && millis() - start < 5000) {
+                readLen = stream->readBytes(buffer, sizeof(buffer) - 1);
+                buffer[readLen] = '\0';
+            }
+            Serial.print("[HTTP] Response body: ");
+            Serial.println(buffer);
+        }
+
+        if (httpResponseCode == HTTP_CODE_OK || httpResponseCode == HTTP_CODE_CREATED) {
+            jsonDoc.clear();
+            strcpy(lastReceivedData, "[]");
+            Serial.println("[HTTP] Payload acknowledged, cleared lastReceivedData.");
+        }
+    } else {
+        Serial.printf("✖️ [HTTP] POST failed! Code: %d, Error: %s\n",
+                      httpResponseCode,
+                      httpClient.errorToString(httpResponseCode).c_str());
+        jsonDoc.clear();
+    }
+
+    httpClient.end();
+    wifiClient.stop();
+
+    Serial.printf("[HTTP] Free heap after request: %u\n", ESP.getFreeHeap());
+    Serial.println("======== DEBUG END ========");
 }
 
 void Base::processHttpQueue() {
-    if (!strcmp(lastReceivedData, "[]")) {
+    static bool wasEmpty = false;
+
+    if (lastReceivedData == nullptr || strlen(lastReceivedData) < 5 ||
+        strcmp(lastReceivedData, "[]") == 0 || strstr(lastReceivedData, "[null]")) {
+        if (!wasEmpty) {
+            Serial.println("[HTTPS] Skipping empty or invalid data.");
+            wasEmpty = true;
+        }
         return;
     }
+
+    wasEmpty = false;
 
     static bool certSet = false;
     if (!certSet) {
@@ -74,36 +186,50 @@ vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl
         certSet = true;
     }
 
-    Serial.println("Sending HTTP POST...");
-    char buffer[512];
-    memset(buffer, 0, sizeof(buffer));
+    Serial.println("======== HTTPS DEBUG START ========");
+    Serial.print("[HTTPS] ESP32 local IP: ");
+    Serial.println(WiFi.localIP());
+    Serial.println("[HTTPS] Starting HTTPClient...");
 
+    httpClient.setTimeout(5000);
     bool began = httpClient.begin(secureClient, "https://vaquinet-api.onrender.com/esp/data");
     if (!began) {
-        Serial.println("HTTPS begin failed");
+        Serial.println("✖️ [HTTPS] httpClient.begin() failed");
         httpClient.end();
         secureClient.stop();
         return;
     }
 
+    Serial.println("✔️ [HTTPS] httpClient.begin() succeeded");
     httpClient.addHeader("Content-Type", "application/json");
+
+    Serial.print("[HTTPS] POSTing payload: ");
+    Serial.println(lastReceivedData);
 
     int httpResponseCode = httpClient.POST(lastReceivedData);
 
     if (httpResponseCode > 0) {
+        Serial.printf("✔️ [HTTPS] POST success! Code: %d\n", httpResponseCode);
+
+        char buffer[512];
         WiFiClient* stream = httpClient.getStreamPtr();
-        if (stream) {
-            while (stream->available()) {
-                int readLen = stream->readBytes(buffer, sizeof(buffer) - 1);
-                buffer[readLen] = '\0';
-            }
+        if (stream && stream->available()) {
+            unsigned long start = millis();
+            int readLen = stream->readBytes(buffer, sizeof(buffer) - 1);
+            buffer[readLen] = '\0';
+            Serial.print("[HTTPS] Response body: ");
+            Serial.println(buffer);
         }
+
         if (httpResponseCode == HTTP_CODE_OK || httpResponseCode == HTTP_CODE_CREATED) {
             jsonDoc.clear();
             strcpy(lastReceivedData, "[]");
+            Serial.println("[HTTPS] Payload acknowledged, cleared lastReceivedData.");
         }
     } else {
-        Serial.printf("POST failed: %s\n", httpClient.errorToString(httpResponseCode).c_str());
+        Serial.printf("✖️ [HTTPS] POST failed! Code: %d, Error: %s\n",
+                      httpResponseCode,
+                      httpClient.errorToString(httpResponseCode).c_str());
         jsonDoc.clear();
     }
 
@@ -124,6 +250,7 @@ void Base::enqueueMessage(const char* json) {
     msg.receivedAt = millis();
     messageQueue.push(msg);
 }
+
 
 void Base::addNodeMac(const uint8_t* mac) {
     std::array<uint8_t, 6> macArray;
@@ -149,22 +276,44 @@ void Base::processMessageQueue() {
         Message msg = messageQueue.front();
         messageQueue.pop();
 
+        Serial.print("[Queue] Processing msg: ");
+        Serial.println(msg.json);
+
         StaticJsonDocument<512> tempDoc;
         DeserializationError error = deserializeJson(tempDoc, msg.json);
-        if (!error) {
-            jsonArray.add(tempDoc.as<JsonObject>());
-        } else {
-            Serial.printf("Failed to parse message JSON: %s\n", error.c_str());
+        if (error) {
+            Serial.printf("❌ Failed to parse JSON: %s\n", error.c_str());
+            continue;
         }
+
+        JsonObject obj = tempDoc.as<JsonObject>();
+        jsonArray.add(obj);
+        Serial.println("✅ Added to JSON array.");
+    }
+
+    if (jsonArray.size() == 0) {
+        Serial.println("[Queue] All messages were invalid, skipping serialization.");
+        strcpy(lastReceivedData, "[]");
+        return;
+    }
+
+    if (measureJson(jsonDoc) >= sizeof(lastReceivedData)) {
+        Serial.println("❌ JSON too large for lastReceivedData");
+        strcpy(lastReceivedData, "[]");
+        return;
     }
 
     if (serializeJson(jsonDoc, lastReceivedData, sizeof(lastReceivedData)) == 0) {
-        Serial.println("Failed to serialize JSON to lastReceivedData");
+        Serial.println("❌ Failed to serialize to lastReceivedData");
         strcpy(lastReceivedData, "[]");
+    } else {
+        Serial.print("✅ Final serialized JSON: ");
+        Serial.println(lastReceivedData);
     }
 
+    // Optional cleanup if queue still bloated
     if (messageQueue.size() > MAX_QUEUE_SIZE) {
-        Serial.println("Queue overflow, clearing oldest messages");
+        Serial.println("⚠️ Queue overflow, trimming...");
         while (messageQueue.size() > MAX_QUEUE_SIZE / 2) {
             messageQueue.pop();
         }
@@ -174,7 +323,8 @@ void Base::processMessageQueue() {
 void Base::checkHeap() {
     static unsigned long lastCheck = 0;
     if (millis() - lastCheck > 60000) {
-        Serial.printf("Free heap: %u\n", ESP.getFreeHeap());
+        Serial.printf("Free heap: %u, Max alloc heap: %u\n", 
+                      ESP.getFreeHeap(), ESP.getMaxAllocHeap());
         if (ESP.getFreeHeap() < 10000) {
             Serial.println("Warning: Low heap memory");
             nodeMacs.clear();

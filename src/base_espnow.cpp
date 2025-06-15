@@ -147,6 +147,7 @@ void EspNowBase::update() {
 
   processMessageQueue();
   processHttpQueue();
+  //processLocalHttpQueue();
   checkHeap();
 }
 
